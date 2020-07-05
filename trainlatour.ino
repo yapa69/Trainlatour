@@ -274,7 +274,7 @@ void loop() {
           
           Serial.print(buffer);Serial.print(" : ");Serial.print(tabtrains[i].gare_dest);Serial.print(tabtrains[i].direction_type);Serial.print(" (");Serial.print(tabtrains[i].physical_mode);Serial.println(")");
   
-           //if  (strcmp(tabtrains[i].direction_type,"forward") == 0){//resultats fournis par l'API alĂ©atoire sur direction_type
+           //if  (strcmp(tabtrains[i].direction_type,"forward") == 0){//resultats fournis par l'API aléatoire sur direction_type
            //if  (strncmp(tabtrains[i].gare_dest,"Lyon",4) == 0){
                 display.setTextSize(2);
                 displayText(basebuffer, offsetaffichage, CENTER_ALIGNMENT);
@@ -287,6 +287,7 @@ void loop() {
                 }
                 else{
                     displayText(tabtrains[i].numtrain, offsetaffichage, CENTER_ALIGNMENT);
+                    blindled = false;
                 }
                 offsetaffichage+=8;
                 display.drawFastHLine( 0, offsetaffichage, 128, GxEPD_BLACK);
@@ -302,24 +303,20 @@ void loop() {
 
     http.end();   //Close connection
   }
-
+else{
+   display.eraseDisplay();
+   display.fillScreen(GxEPD_WHITE);
+   displayText(String("tentative reco wifi"), 10, LEFT_ALIGNMENT); 
+   Serial.println("perte de connexion wifi");
+   WiFi.begin(ssid, password);
+   while (WiFi.status() != WL_CONNECTED) {
+        delay(1000);
+      }
+}
   
   // Delay between APi call
   if(needrefresh){Serial.println("Refresh");display.update();needrefresh = false;}
-  if (blindled){//retard
-      for (int i = 0; i < 30; i++) {  
-          digitalWrite(32, HIGH); 
-          digitalWrite(22, LOW); 
-          delay(1000); 
-          digitalWrite(32, LOW); 
-          digitalWrite(22, HIGH); 
-          delay(1000); 
-      }
-      blindled=false;
-      digitalWrite(22, LOW); 
-      delay(120000);
-  }
-  else{
+  
     switch( heureencours )
     {
         case 6:
@@ -341,9 +338,26 @@ void loop() {
         default :
             Serial.print("Autres HEURES "); Serial.println(heureencours);
             delay(600000);
+           // delay(60000);
             break;
             
     }
     
+  
+}
+
+void loop2(){
+
+   if (blindled){//retard
+          digitalWrite(32, HIGH); 
+          digitalWrite(22, LOW); 
+          delay(1000); 
+          digitalWrite(32, LOW); 
+          digitalWrite(22, HIGH); 
+          delay(1000); 
+  }
+  else{
+      digitalWrite(22, LOW); 
+      delay(1000); 
   }
 }
