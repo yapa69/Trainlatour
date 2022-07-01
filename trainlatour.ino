@@ -6,25 +6,31 @@
 #include "board_def.h"
 #include "Button2.h"
 #include "Esp.h"
-#include <SPIFFS.h>
-
 #include <WiFi.h>
 #include <HTTPClient.h>
 #define ARDUINOJSON_DECODE_UNICODE 1
 #include <ArduinoJson.h>
 #include <time.h> 
+#include <TLog.h>      // The T-Logging library.
+
+#include <TelnetSerialStream.h>
+TelnetSerialStream telnetSerialStream = TelnetSerialStream();
+#include <WebSerialStream.h>
+WebSerialStream webSerialStream = WebSerialStream();
 
 const char* ssid = "";
 const char* password = "";
-int heureencours;
- 
+int heureencours,delai;
+bool ledState=LOW;
+
+unsigned long currentTime=0,previousTime=0,heartbeatTime=0,interval,interval1=200, interval2=5000;
+
 char* trainencache1  = "";
 char* trainencache2  = "";
 char* trainencache3  = "";
 char* trainencache4  = "";
 
- bool needrefresh= true;
-  bool blindled= false;
+bool needrefresh= true,blindled= false;
 
 struct Train
 {
@@ -35,7 +41,6 @@ struct Train
     const char* direction_type;
     const char* numtrain;
 };
-
 
 
 #include <GxGDE0213B72B/GxGDE0213B72B.h>      // 2.13" b/w
@@ -92,7 +97,7 @@ GxEPD_Class display(io, ELINK_RESET, ELINK_BUSY);
 
 Train tabtrains[10]; 
 
-
+//display text on E-ink display
 void displayText(const String &str, int16_t y, uint8_t alignment)
 {
     int16_t x = 0;
@@ -118,6 +123,7 @@ void displayText(const String &str, int16_t y, uint8_t alignment)
     display.println(str);
 }
 
+//init display e-ink
 void displayInit(void)
 {
     static bool isInit = false;
@@ -135,14 +141,25 @@ void displayInit(void)
 }
 
 void setup() {
-  // put your setup code here, to run once:
-    displayInit();
-    display.fillScreen(GxEPD_WHITE);
-    Serial.begin(115200);
-     WiFi.begin(ssid, password);
+
+      displayInit();
+      display.fillScreen(GxEPD_WHITE);
+      Serial.begin(115200);
+    
+      Log.addPrintStream(std::make_shared<TelnetSerialStream>(telnetSerialStream));
+      Log.addPrintStream(std::make_shared<WebSerialStream>(webSerialStream));
+    
+      WiFi.begin(ssid, password);
       while (WiFi.status() != WL_CONNECTED) {
-        delay(1000);
+         delay(1000);
       }
+
+      MDNS.begin("lestrains");
+      
+      Log.begin();
+      Log.print(F("We have network. You can telnet to "));
+      Log.print(WiFi.localIP());
+      
       pinMode(32, OUTPUT);
       pinMode(22, OUTPUT);
       digitalWrite(32, HIGH); 
@@ -152,22 +169,67 @@ void setup() {
       digitalWrite(22, HIGH); 
       delay(500); 
       digitalWrite(22, LOW); 
-      Serial.println("Setup termine");
+      Log.println(F("Setup termine"));
+      Log.println(F("Call fonction CalculTrains for the first time"));
+      CalculTrains();
 }
 
+
 void loop() {
-  // put your main code here, to run repeatedly:
- // button_loop();
- //display.eraseDisplay();
+    Log.loop();
+
+    switch( heureencours )
+    {
+        case 6:
+            delai = 120000;
+            break;
+        case 7:
+            delai = 120000;
+            break;
+        case 8:
+            delai = 120000;
+            break;
+        case 22:
+            delai = 28800000;
+            break;
+        default :
+            delai = 600000;
+            break;
+    }
+    
+    currentTime=millis();
+    if((currentTime-previousTime)>delai){
+        previousTime=currentTime;
+        Log.println(F("----"));
+        Log.println(currentTime);
+        CalculTrains();
+    }
+
+    //heartbeat LED
+    if(ledState){
+      interval=interval2;
+    }else{
+      interval=interval1;
+    }
+    if((currentTime-heartbeatTime)>interval){
+        heartbeatTime=currentTime;
+        ledState=!ledState;
+        digitalWrite(22,!ledState);
+    }
+
+}
+
+void CalculTrains() {
+ blindled=false;
+ 
  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("Connected to the WiFi network");
+    //Log.println("Connected to the WiFi network");
     HTTPClient http;  //Object of class HTTPClient
-    http.begin("https://APIKEY@api.sncf.com/v1/coverage/sncf/stop_areas/stop_area%3AOCE%3ASA%3A87721548/departures?count=4&direction_type=forward");//trains gare
-    //http.begin("https://APIKEY@api.sncf.com/v1/coverage/sncf/stop_areas/stop_area%3AOCE%3ASA%3A87698316/departures?count=6");//car hippodrome
-   
+    http.begin(F("https://5d7cf7b1-e311-4f64-b568-c408fe69c326@api.sncf.com/v1/coverage/sncf/stop_areas/stop_area%3ASNCF%3A87721548/departures?count=4"));//trains gare
+
     int httpCode = http.GET();
     //Check the returning code
-    Serial.print("HTTP COde : ");Serial.println(httpCode);                                                               
+    //Log.print("HTTP COde : ");Log.println(httpCode);                                                               
     if (httpCode > 0) {
    
       // Get the request response payload
@@ -178,11 +240,10 @@ void loop() {
       
       DeserializationError error = deserializeJson(doc, response);
       if (error) {
-        Serial.print(F("deserializeJson() failed: "));    
-        Serial.println(error.c_str()); 
+        Log.print(F("deserializeJson() failed: "));    
+        Log.println(error.c_str()); 
         display.fillScreen(GxEPD_WHITE);
         displayText(String("DESERIALISATION erreur"), 10, LEFT_ALIGNMENT); 
-        needrefresh = true; 
         blindled=true;
         return;  
       }
@@ -190,10 +251,11 @@ void loop() {
       //combiens de trains ?
       JsonObject pagination = doc["pagination"];
       int pagination_total_result = pagination["total_result"];
-      Serial.print("Nb trains : ");Serial.println(pagination_total_result);  
+      Log.print(F("Nb trains : "));Log.println(pagination_total_result);
       if (pagination_total_result == 0) {
           displayText(String("Pas de trains"), 30, LEFT_ALIGNMENT);
           needrefresh = true; 
+          blindled=true;
       }
       else{
         
@@ -206,17 +268,16 @@ void loop() {
          //struct tm currentdatetime= {0};
          sscanf( current_datetime, "%4d%2d%2dT%2d%2d%2d", &yr, &mnth, &d, &heureencours, &m, &s); //spfrtime bugge sur arduino   
          //currentdatetime.tm_hour  = h; 
-           Serial.print("Heure en cours");Serial.println(heureencours);
+         Log.print(F("Heure en cours "));Log.print(heureencours);Log.print("H");Log.println(m);
          
   
-        
         for (int i = 0; i < pagination_total_result; i++) {       
             JsonObject departure = departures[i];
             JsonObject departures_display_informations = departure["display_informations"];
             const char* departures_display_informations_direction = departures_display_informations["direction"]; 
             const char* departures_display_informations_name = departures_display_informations["name"]; 
             const char* physicalmode = departures_display_informations["physical_mode"]; 
-            const char* numerotrain = departures_display_informations["headsign"]; 
+            const char* numerotrain = departures_display_informations["trip_short_name"]; 
             
             JsonObject departures_stop_date_time = departure["stop_date_time"];
             const char* departure_date_time = departures_stop_date_time["departure_date_time"]; 
@@ -231,7 +292,7 @@ void loop() {
             train.numtrain = numerotrain;
 
             if ((i == 0 &&  (strcmp(numerotrain,trainencache1) != 0)) || (strcmp(trainencache1,"") == 0) ){
-              Serial.print("Refresh e-ink ! From json :");Serial.print(numerotrain);Serial.print(" en cache :");Serial.println(trainencache1);//la plupart du temps cet apppel suffit
+              Log.print(F("Refresh e-ink ! "));Log.print(numerotrain);Log.print(F(" en cache : "));Log.println(trainencache1);//la plupart du temps cet apppel suffit
               trainencache1 = strdup(numerotrain);
               needrefresh = true;
             }
@@ -269,10 +330,10 @@ void loop() {
         for (int i = 0; i < pagination_total_result; i++) {
           char buffer[80];
           char basebuffer[80];
-          strftime (buffer, 80, "%H:%M", localtime(&(tabtrains[i].dept_time)));
-          strftime (basebuffer, 80, "%H:%M", localtime(&(tabtrains[i].base_dept_time)));
+          strftime (buffer, 80, "%H:%M", localtime(&(tabtrains[i].dept_time)));//heure recalculée avec le retard
+          strftime (basebuffer, 80, "%H:%M", localtime(&(tabtrains[i].base_dept_time)));//heure avec retard 
           
-          Serial.print(buffer);Serial.print(" : ");Serial.print(tabtrains[i].gare_dest);Serial.print(tabtrains[i].direction_type);Serial.print(" (");Serial.print(tabtrains[i].physical_mode);Serial.println(")");
+          Log.print(buffer);Log.print(" : ");Log.println(tabtrains[i].gare_dest);//heure incluant le retard
   
            //if  (strcmp(tabtrains[i].direction_type,"forward") == 0){//resultats fournis par l'API aléatoire sur direction_type
            //if  (strncmp(tabtrains[i].gare_dest,"Lyon",4) == 0){
@@ -280,84 +341,59 @@ void loop() {
                 displayText(basebuffer, offsetaffichage, CENTER_ALIGNMENT);
                 offsetaffichage+=20;
                 display.setTextSize(0);
+
+                digitalWrite(32, LOW); 
+                digitalWrite(22, LOW); 
   
                 if(tabtrains[i].dept_time  != tabtrains[i].base_dept_time){
-                    displayText(String("RETARD"), offsetaffichage, CENTER_ALIGNMENT);
+                    displayText(String(F("Retard: "))+buffer, offsetaffichage, CENTER_ALIGNMENT);//afficahge de l'heure corrigée
                     blindled = true;
                 }
                 else{
-                    displayText(tabtrains[i].numtrain, offsetaffichage, CENTER_ALIGNMENT);
-                    blindled = false;
+                    char *ville;
+                    char *villeshort;
+                    ville = strstr(tabtrains[i].gare_dest, "(");
+                    //strncpy ( villeshort, ville+1, sizeof(ville)-3);//suppression des parentheses
+                    //villeshort[sizeof(ville)-3] = '\0';
+                    displayText(ville, offsetaffichage, CENTER_ALIGNMENT);
+                    //blindled = false;
                 }
                 offsetaffichage+=8;
                 display.drawFastHLine( 0, offsetaffichage, 128, GxEPD_BLACK);
                 offsetaffichage+=35;
              // }
         }
-        
-      
 
+        //update LED status
+        if (blindled == true){
+                digitalWrite(32, HIGH); 
+                digitalWrite(22, HIGH); 
+        }
+        else{
+            digitalWrite(32, LOW); 
+            digitalWrite(22, LOW); 
+        }
+        
       }
        
     }
 
     http.end();   //Close connection
-  }
-else{
+}
+else{//no connection to wifi
    display.eraseDisplay();
    display.fillScreen(GxEPD_WHITE);
-   displayText(String("tentative reco wifi"), 10, LEFT_ALIGNMENT); 
-   Serial.println("perte de connexion wifi");
+   displayText(String(F("tentative reco wifi")), 10, LEFT_ALIGNMENT); 
+   Log.println(F("Perte de connexion wifi"));
    WiFi.begin(ssid, password);
    while (WiFi.status() != WL_CONNECTED) {
         delay(1000);
       }
 }
   
-  // Delay between APi call
-  if(needrefresh){Serial.println("Refresh");display.update();needrefresh = false;}
-  
-    switch( heureencours )
-    {
-        case 6:
-            Serial.println("6 heures");
-            delay(120000);
-            break;
-        case 7:
-            Serial.println("7 HEURES");
-            delay(120000);
-            break;
-        case 8:
-            Serial.println("8 HEURES");
-            delay(120000);
-            break;
-        case 22:
-            Serial.println("22 HEURES");
-            delay(28800000);
-            break;
-        default :
-            Serial.print("Autres HEURES "); Serial.println(heureencours);
-            delay(600000);
-           // delay(60000);
-            break;
-            
-    }
-    
-  
-}
-
-void loop2(){
-
-   if (blindled){//retard
-          digitalWrite(32, HIGH); 
-          digitalWrite(22, LOW); 
-          delay(1000); 
-          digitalWrite(32, LOW); 
-          digitalWrite(22, HIGH); 
-          delay(1000); 
-  }
-  else{
-      digitalWrite(22, LOW); 
-      delay(1000); 
+  // Do we have to refresh
+  if(needrefresh){
+    display.update();
+    needrefresh = false;
   }
 }
