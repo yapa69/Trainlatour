@@ -225,7 +225,7 @@ void CalculTrains() {
  if (WiFi.status() == WL_CONNECTED) {
     //Log.println("Connected to the WiFi network");
     HTTPClient http;  //Object of class HTTPClient
-    http.begin(F("https://5d7cf7b1-e311-4f64-b568-c408fe69c326@api.sncf.com/v1/coverage/sncf/stop_areas/stop_area%3ASNCF%3A87721548/departures?count=4"));//trains gare
+    http.begin(F("https://APIKEY@api.sncf.com/v1/coverage/sncf/stop_areas/stop_area%3ASNCF%3A87721548/departures?count=4"));//trains gare
 
     int httpCode = http.GET();
     //Check the returning code
